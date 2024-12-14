@@ -48,7 +48,7 @@ where
     ///
     /// # Examples
     /// ```
-    /// use rs_car::{CarReader, CarDecodeError};
+    /// use rs_car_sync::{CarReader, CarDecodeError};
     ///
     ///
     /// fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -84,7 +84,7 @@ where
 /// # Examples
 ///
 /// ```
-/// use rs_car::car_read_all;
+/// use rs_car_sync::car_read_all;
 ///
 /// fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///   let mut r = std::fs::File::open("./tests/custom_fixtures/helloworld.car")?;
