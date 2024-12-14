@@ -1,4 +1,4 @@
-use rs_car::car_read_all;
+use rs_car_sync::car_read_all;
 
 enum TestResult {
     Error(&'static str),

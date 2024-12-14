@@ -14,7 +14,7 @@ readme = "README.md"
 license = "MIT OR Apache-2.0"
 
 [lib]
-name = "rs_car"
+name = "rs_car_sync"
 path = "src/lib.rs"
 
 [dependencies]
