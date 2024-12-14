@@ -3,16 +3,12 @@
 //!
 //! # Usage
 //!
-//! - To get a block streamer [`CarReader::new()`]
+//! - To get a block iterator [`CarReader::new()`]
 //! - To read all blocks in memory [car_read_all]
 //!
 
-use std::{
-    pin::Pin,
-    task::{Context, Poll},
-};
+use std::io::Read;
 
-use futures::{future::BoxFuture, AsyncRead, Stream, StreamExt};
 pub use libipld::cid::Cid;
 
 use crate::{
@@ -33,19 +29,19 @@ mod varint;
 /// Decodes a CAR stream yielding its blocks and optionally verifying integrity.
 /// Supports CARv1 and CARv2 formats.
 ///
-/// - To get a block streamer [`CarReader::new()`]
+/// - To get a block iterator [`CarReader::new()`]
 /// - To read all blocks in memory [car_read_all]
 pub struct CarReader<'a, R> {
     // r: &'a mut R,
     pub header: CarHeader,
     read_bytes: usize,
     validate_block_hash: bool,
-    decode_header_future: Option<DecodeBlockFuture<'a, R>>,
+    reader: &'a mut R,
 }
 
 impl<'a, R> CarReader<'a, R>
 where
-    R: AsyncRead + Send + Unpin,
+    R: Read,
 {
     /// Decodes a CAR stream up to the header. Returns a `Stream` type that yields
     /// blocks. The CAR header is available in [`CarReader.header`].
@@ -53,16 +49,15 @@ where
     /// # Examples
     /// ```
     /// use rs_car::{CarReader, CarDecodeError};
-    /// use futures::StreamExt;
     ///
-    /// #[async_std::main]
-    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    ///   let mut r = async_std::fs::File::open("./tests/custom_fixtures/helloworld.car").await?;
     ///
-    ///   let mut car_reader = CarReader::new(&mut r, true).await?;
+    /// fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///   let mut r = std::fs::File::open("./tests/custom_fixtures/helloworld.car")?;
+    ///
+    ///   let mut car_reader = CarReader::new(&mut r, true)?;
     ///   println!("{:?}", car_reader.header);
     ///
-    ///   while let Some(item) = car_reader.next().await {
+    ///   while let Some(item) = car_reader.next() {
     ///     let (cid, block) = item?;
     ///     println!("{:?} {} bytes", cid, block.len());
     ///   }
@@ -70,16 +65,16 @@ where
     ///   Ok(())
     /// }
     /// ```
-    pub async fn new(
-        r: &'a mut R,
+    pub fn new(
+        reader: &'a mut R,
         validate_block_hash: bool,
     ) -> Result<CarReader<'a, R>, CarDecodeError> {
-        let header = read_car_header(r).await?;
+        let header = read_car_header(reader)?;
         return Ok(CarReader {
             header,
             read_bytes: 0,
             validate_block_hash,
-            decode_header_future: Some(Box::pin(decode_block(r))),
+            reader,
         });
     }
 }
@@ -91,11 +86,10 @@ where
 /// ```
 /// use rs_car::car_read_all;
 ///
-/// #[async_std::main]
-/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
-///   let mut r = async_std::fs::File::open("./tests/custom_fixtures/helloworld.car").await?;
+/// fn main() -> Result<(), Box<dyn std::error::Error>> {
+///   let mut r = std::fs::File::open("./tests/custom_fixtures/helloworld.car")?;
 ///
-///   let (blocks, header) = car_read_all(&mut r, true).await?;
+///   let (blocks, header) = car_read_all(&mut r, true)?;
 ///   println!("{:?}", header);
 ///
 ///   for (cid, block) in blocks {
@@ -105,14 +99,14 @@ where
 ///   Ok(())
 /// }
 /// ```
-pub async fn car_read_all<R: AsyncRead + Unpin + Send>(
+pub fn car_read_all<R: Read>(
     r: &mut R,
     validate_block_hash: bool,
 ) -> Result<(Vec<(Cid, Vec<u8>)>, CarHeader), CarDecodeError> {
-    let mut decoder = CarReader::new(r, validate_block_hash).await?;
+    let mut decoder = CarReader::new(r, validate_block_hash)?;
     let mut items: Vec<(Cid, Vec<u8>)> = vec![];
 
-    while let Some(item) = decoder.next().await {
+    while let Some(item) = decoder.next() {
         let item = item?;
         items.push(item);
     }
@@ -120,46 +114,34 @@ pub async fn car_read_all<R: AsyncRead + Unpin + Send>(
     Ok((items, decoder.header))
 }
 
-type DecodeBlockFuture<'a, R> =
-    BoxFuture<'a, Result<(&'a mut R, Cid, Vec<u8>, usize), CarDecodeError>>;
-
-impl<'a, R> Stream for CarReader<'a, R>
+impl<'a, R> Iterator for CarReader<'a, R>
 where
-    R: AsyncRead + Send + Unpin + 'a,
+    R: Read + 'a,
 {
     type Item = Result<(Cid, Vec<u8>), CarDecodeError>;
 
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let me = Pin::into_inner(self);
-
-        if let StreamEnd::AfterNBytes(blocks_len) = me.header.eof_stream {
-            if me.read_bytes >= blocks_len {
-                return Poll::Ready(None);
+    fn next(&mut self) -> Option<Self::Item> {
+        if let StreamEnd::AfterNBytes(blocks_len) = self.header.eof_stream {
+            if self.read_bytes >= blocks_len {
+                return None;
             }
         }
-
-        match &mut me.decode_header_future {
-            Some(decode_future) => match decode_future.as_mut().poll(cx) {
-                Poll::Pending => Poll::Pending,
-                Poll::Ready(Ok((r, cid, block, block_len))) => {
-                    if me.validate_block_hash {
-                        assert_block_cid(&cid, &block)?;
+        match decode_block(&mut self.reader) {
+            Ok((_r, cid, block, block_len)) => {
+                if self.validate_block_hash {
+                    if let Err(e) = assert_block_cid(&cid, &block) {
+                        return Some(Err(e));
                     }
-                    me.read_bytes += block_len;
-                    me.decode_header_future = Some(Box::pin(decode_block(r)));
-                    Poll::Ready(Some(Ok((cid, block))))
                 }
-                Poll::Ready(Err(CarDecodeError::BlockStartEOF))
-                    if me.header.eof_stream == StreamEnd::OnBlockEOF =>
-                {
-                    Poll::Ready(None)
-                }
-                Poll::Ready(Err(err)) => {
-                    me.decode_header_future = None;
-                    Poll::Ready(Some(Err(err)))
-                }
-            },
-            None => Poll::Ready(None),
+                self.read_bytes += block_len;
+                Some(Ok((cid, block)))
+            }
+            Err(CarDecodeError::BlockStartEOF)
+                if self.header.eof_stream == StreamEnd::OnBlockEOF =>
+            {
+                None
+            }
+            Err(err) => Some(Err(err)),
         }
     }
 }
@@ -168,7 +150,6 @@ where
 mod tests {
     use std::{collections::HashMap, str::FromStr};
 
-    use futures::executor;
     use serde::{Deserialize, Serialize};
 
     use super::*;
@@ -205,34 +186,30 @@ mod tests {
 
     #[test]
     fn decode_carv1_helloworld_no_stream() {
-        executor::block_on(async {
-            let car_filepath = "./tests/custom_fixtures/helloworld.car";
-            let mut file = async_std::fs::File::open(car_filepath).await.unwrap();
-            let (blocks, header) = car_read_all(&mut file, true).await.unwrap();
+        let car_filepath = "./tests/custom_fixtures/helloworld.car";
+        let mut file = std::fs::File::open(car_filepath).unwrap();
+        let (blocks, header) = car_read_all(&mut file, true).unwrap();
 
-            let root_cid = Cid::from_str("QmUU2HcUBVSXkfWPUc3WUSeCMrWWeEJTuAgR9uyWBhh9Nf").unwrap();
-            let root_block = hex::decode("0a110802120b68656c6c6f776f726c640a180b").unwrap();
+        let root_cid = Cid::from_str("QmUU2HcUBVSXkfWPUc3WUSeCMrWWeEJTuAgR9uyWBhh9Nf").unwrap();
+        let root_block = hex::decode("0a110802120b68656c6c6f776f726c640a180b").unwrap();
 
-            assert_eq!(blocks, vec!((root_cid, root_block)));
-            assert_eq!(header.version, CarVersion::V1);
-            assert_eq!(header.roots, vec!(root_cid));
-        })
+        assert_eq!(blocks, vec!((root_cid, root_block)));
+        assert_eq!(header.version, CarVersion::V1);
+        assert_eq!(header.roots, vec!(root_cid));
     }
 
     #[test]
     fn decode_carv1_helloworld_stream() {
-        executor::block_on(async {
-            let car_filepath = "./tests/custom_fixtures/helloworld.car";
-            let mut file = async_std::fs::File::open(car_filepath).await.unwrap();
-            let (blocks, header) = car_read_all(&mut file, true).await.unwrap();
+        let car_filepath = "./tests/custom_fixtures/helloworld.car";
+        let mut file = std::fs::File::open(car_filepath).unwrap();
+        let (blocks, header) = car_read_all(&mut file, true).unwrap();
 
-            let root_cid = Cid::from_str("QmUU2HcUBVSXkfWPUc3WUSeCMrWWeEJTuAgR9uyWBhh9Nf").unwrap();
-            let root_block = hex::decode("0a110802120b68656c6c6f776f726c640a180b").unwrap();
+        let root_cid = Cid::from_str("QmUU2HcUBVSXkfWPUc3WUSeCMrWWeEJTuAgR9uyWBhh9Nf").unwrap();
+        let root_block = hex::decode("0a110802120b68656c6c6f776f726c640a180b").unwrap();
 
-            assert_eq!(blocks, vec!((root_cid, root_block)));
-            assert_eq!(header.version, CarVersion::V1);
-            assert_eq!(header.roots, vec!(root_cid));
-        })
+        assert_eq!(blocks, vec!((root_cid, root_block)));
+        assert_eq!(header.version, CarVersion::V1);
+        assert_eq!(header.roots, vec!(root_cid));
     }
 
     #[test]
@@ -266,13 +243,10 @@ mod tests {
         // 36 - block 7 len = 54, block_len = 18
         // 0171122069ea0740f9807a28f4d932c62e7c1c83be055e55072c90266ab3e79df63a365b - block 7 cid (bafyreidj5idub6mapiupjwjsyyxhyhedxycv4vihfsicm2vt46o7morwlm)
         // a2646c696e6bf6646e616d65656c696d626f - block 7 data
-        executor::block_on(async {
-            run_car_basic_test(
-                "./tests/spec_fixtures/carv1-basic.car",
-                "./tests/spec_fixtures/carv1-basic.json",
-            )
-            .await;
-        })
+        run_car_basic_test(
+            "./tests/spec_fixtures/carv1-basic.car",
+            "./tests/spec_fixtures/carv1-basic.json",
+        );
     }
 
     #[test]
@@ -302,21 +276,18 @@ mod tests {
         // 6c6f6273746572 - block 4 data
         // 0100000028000000c800000000000000a2e1c40da1ae335d4dffe729eb4d5ca23b74b9e51fc535f4a804a261080c294d9401000000000000b474a99a2705e23cf905a484ec6d14ef58b56bbe62e9292783466ec363b5072d6b01000000000000d745b7757f5b4593eeab7820306c7bc64eb496a7410a0d07df7a34ffec4b97f11201000000000000d9c0d5376d26f1931f7ad52d7acc00fc1090d2edb0808bf61eeb0a152826f6268b00000000000000fb16f5083412ef1371d031ed4aa239903d84efdadf1ba3cd678e6475b1a232f83900000000000000
 
-        executor::block_on(async {
-            run_car_basic_test(
-                "./tests/spec_fixtures/carv2-basic.car",
-                "./tests/spec_fixtures/carv2-basic.json",
-            )
-            .await;
-        })
+        run_car_basic_test(
+            "./tests/spec_fixtures/carv2-basic.car",
+            "./tests/spec_fixtures/carv2-basic.json",
+        );
     }
 
-    async fn run_car_basic_test(car_filepath: &str, car_json_expected: &str) {
+    fn run_car_basic_test(car_filepath: &str, car_json_expected: &str) {
         let expected_car = std::fs::read_to_string(car_json_expected).unwrap();
         let expected_car: ExpectedCarv1 = serde_json::from_str(&expected_car).unwrap();
 
-        let mut file = async_std::fs::File::open(car_filepath).await.unwrap();
-        let mut streamer = CarReader::new(&mut file, true).await.unwrap();
+        let mut file = std::fs::File::open(car_filepath).unwrap();
+        let mut streamer = CarReader::new(&mut file, true).unwrap();
 
         // Assert header v1
         assert_eq!(streamer.header.version as u8, expected_car.header.version);
@@ -327,7 +298,7 @@ mod tests {
 
         // Consume stream and read all blocks into memory
         let mut blocks: Vec<(Cid, Vec<u8>)> = vec![];
-        while let Some(item) = streamer.next().await {
+        while let Some(item) = streamer.next() {
             let item = item.unwrap();
             blocks.push(item);
         }

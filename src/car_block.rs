@@ -1,6 +1,4 @@
-use std::io;
-
-use futures::{AsyncRead, AsyncReadExt};
+use std::io::{self, Read};
 
 use crate::{block_cid::read_block_cid, error::CarDecodeError, varint::read_varint_u64, Cid};
 
@@ -10,24 +8,22 @@ const MAX_BLOCK_LEN: u64 = 1073741824;
 /// # Returns
 ///
 /// (cid, block buffer, total block byte length including varint)
-pub(crate) async fn decode_block<R: AsyncRead + Unpin>(
+pub(crate) fn decode_block<R: Read>(
     r: &mut R,
 ) -> Result<(&mut R, Cid, Vec<u8>, usize), CarDecodeError> {
-    let (len, cid, varint_len, cid_len) = decode_block_header(r).await?;
+    let (len, cid, varint_len, cid_len) = decode_block_header(r)?;
 
     // len from header = block_len - varint_len
     let block_len = len - cid_len;
 
     let mut block_buf = vec![0u8; block_len];
-    r.read_exact(&mut block_buf).await?;
+    r.read_exact(&mut block_buf)?;
 
     Ok((r, cid, block_buf, len + varint_len))
 }
 
-async fn decode_block_header<R: AsyncRead + Unpin>(
-    src: &mut R,
-) -> Result<(usize, Cid, usize, usize), CarDecodeError> {
-    let (len, varint_len) = match read_varint_u64(src).await {
+fn decode_block_header<R: Read>(src: &mut R) -> Result<(usize, Cid, usize, usize), CarDecodeError> {
+    let (len, varint_len) = match read_varint_u64(src) {
         Ok(Some(len)) => len,
         Ok(None) => {
             return Err(CarDecodeError::InvalidBlockHeader(
@@ -53,7 +49,7 @@ async fn decode_block_header<R: AsyncRead + Unpin>(
         )));
     }
 
-    let (cid, cid_len) = read_block_cid(src).await?;
+    let (cid, cid_len) = read_block_cid(src)?;
 
     Ok((len as usize, cid, varint_len, cid_len))
 }

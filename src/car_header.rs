@@ -1,4 +1,4 @@
-use futures::{AsyncRead, AsyncReadExt};
+use std::io::Read;
 
 use crate::{
     carv1_header::{decode_carv1_header, CarV1Header},
@@ -35,10 +35,8 @@ pub struct CarHeader {
 
 impl CarHeader {}
 
-pub(crate) async fn read_car_header<R: AsyncRead + Unpin>(
-    r: &mut R,
-) -> Result<CarHeader, CarDecodeError> {
-    let (header, _) = read_carv1_header(r).await?;
+pub(crate) fn read_car_header<R: Read>(r: &mut R) -> Result<CarHeader, CarDecodeError> {
+    let (header, _) = read_carv1_header(r)?;
 
     match header.version {
         1 => Ok(CarHeader {
@@ -50,7 +48,7 @@ pub(crate) async fn read_car_header<R: AsyncRead + Unpin>(
             eof_stream: StreamEnd::OnBlockEOF,
         }),
         2 => {
-            let (header_v2, (header_v1, header_v1_len)) = read_carv2_header(r).await?;
+            let (header_v2, (header_v1, header_v1_len)) = read_carv2_header(r)?;
             let blocks_len = header_v2.data_size as usize - header_v1_len;
             Ok(CarHeader {
                 version: CarVersion::V2,
@@ -70,16 +68,11 @@ pub(crate) async fn read_car_header<R: AsyncRead + Unpin>(
 /// # Returns
 ///
 /// (header, total header byte length including varint)
-async fn read_carv1_header<R: AsyncRead + Unpin>(
-    src: &mut R,
-) -> Result<(CarV1Header, usize), CarDecodeError> {
+fn read_carv1_header<R: Read>(src: &mut R) -> Result<(CarV1Header, usize), CarDecodeError> {
     // Decode header varint
-    let (header_len, varint_len) =
-        read_varint_u64(src)
-            .await?
-            .ok_or(CarDecodeError::InvalidCarV1Header(
-                "invalid header varint".to_string(),
-            ))?;
+    let (header_len, varint_len) = read_varint_u64(src)?.ok_or(
+        CarDecodeError::InvalidCarV1Header("invalid header varint".to_string()),
+    )?;
 
     if header_len > MAX_HEADER_LEN {
         return Err(CarDecodeError::InvalidCarV1Header(format!(
@@ -89,18 +82,18 @@ async fn read_carv1_header<R: AsyncRead + Unpin>(
     }
 
     let mut header_buf = vec![0u8; header_len as usize];
-    src.read_exact(&mut header_buf).await?;
+    src.read_exact(&mut header_buf)?;
 
     let header = decode_carv1_header(&header_buf)?;
 
     Ok((header, header_len as usize + varint_len))
 }
 
-async fn read_carv2_header<R: AsyncRead + Unpin>(
+fn read_carv2_header<R: Read>(
     r: &mut R,
 ) -> Result<(CarV2Header, (CarV1Header, usize)), CarDecodeError> {
     let mut header_buf = [0u8; CARV2_HEADER_SIZE];
-    r.read_exact(&mut header_buf).await?;
+    r.read_exact(&mut header_buf)?;
 
     let header_v2 = decode_carv2_header(&header_buf)?;
 
@@ -114,18 +107,19 @@ async fn read_carv2_header<R: AsyncRead + Unpin>(
             )));
         }
         let mut padding_buf = vec![0u8; padding_len];
-        r.read_exact(&mut padding_buf).await?;
+        r.read_exact(&mut padding_buf)?;
     }
 
     // Read inner CARv1 header
-    let header_v1 = read_carv1_header(r).await?;
+    let header_v1 = read_carv1_header(r)?;
 
     Ok((header_v2, header_v1))
 }
 
 #[cfg(test)]
 mod tests {
-    use futures::{executor, io::Cursor};
+
+    use std::io::Cursor;
 
     use super::*;
     use crate::{
@@ -135,19 +129,15 @@ mod tests {
 
     #[test]
     fn read_carv1_header_v2_pragma() {
-        executor::block_on(async {
-            assert_eq!(
-                read_carv1_header(&mut Cursor::new(&CARV2_PRAGMA))
-                    .await
-                    .unwrap(),
-                (
-                    CarV1Header {
-                        version: 2,
-                        roots: None
-                    },
-                    CARV2_PRAGMA_SIZE
-                )
+        assert_eq!(
+            read_carv1_header(&mut Cursor::new(&CARV2_PRAGMA)).unwrap(),
+            (
+                CarV1Header {
+                    version: 2,
+                    roots: None
+                },
+                CARV2_PRAGMA_SIZE
             )
-        })
+        )
     }
 }

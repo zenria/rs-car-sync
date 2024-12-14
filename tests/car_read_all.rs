@@ -10,9 +10,8 @@ macro_rules! car_read_all_test {
         #[test]
         fn $name() {
             let result = std::panic::catch_unwind(|| {
-                let mut file =
-                    futures::executor::block_on(async_std::fs::File::open($file)).unwrap();
-                futures::executor::block_on(car_read_all(&mut file, true))
+                let mut file = std::fs::File::open($file).unwrap();
+                car_read_all(&mut file, true)
             });
 
             match result {
@@ -47,7 +46,9 @@ macro_rules! car_read_all_test {
 car_read_all_test!(
     go_car_fixture_sample_corrupt_pragma,
     "tests/go_car_fixtures/sample-corrupt-pragma.car",
-    TestResult::Error("IoError(Kind(UnexpectedEof))")
+    TestResult::Error(
+        "IoError(Error { kind: UnexpectedEof, message: \"failed to fill whole buffer\" })"
+    )
 );
 car_read_all_test!(
     go_car_fixture_sample_rootless_v42,
@@ -77,7 +78,9 @@ car_read_all_test!(
 car_read_all_test!(
     go_car_fixture_sample_v1_tailing_corrupt_section,
     "tests/go_car_fixtures/sample-v1-tailing-corrupt-section.car",
-    TestResult::Error("IoError(Kind(UnexpectedEof))")
+    TestResult::Error(
+        "IoError(Error { kind: UnexpectedEof, message: \"failed to fill whole buffer\" })"
+    )
 );
 car_read_all_test!(
     go_car_fixture_sample_v1_with_zero_len_section,

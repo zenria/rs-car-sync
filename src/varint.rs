@@ -1,18 +1,14 @@
-use std::io;
-
-use futures::{AsyncRead, AsyncReadExt};
+use std::io::{self, Read};
 
 // Max size of u64 varint
 const U64_LEN: usize = 10;
 
-pub(crate) async fn read_varint_u64<R: AsyncRead + Unpin>(
-    stream: &mut R,
-) -> Result<Option<(u64, usize)>, io::Error> {
+pub(crate) fn read_varint_u64<R: Read>(stream: &mut R) -> Result<Option<(u64, usize)>, io::Error> {
     let mut result: u64 = 0;
 
     for i in 0..U64_LEN {
         let mut buf = [0u8; 1];
-        stream.read_exact(&mut buf).await?;
+        stream.read_exact(&mut buf)?;
 
         let byte = buf[0];
         result |= u64::from(byte & 0b0111_1111) << (i * 7);
@@ -29,7 +25,8 @@ pub(crate) async fn read_varint_u64<R: AsyncRead + Unpin>(
 
 #[cfg(test)]
 mod tests {
-    use futures::io::Cursor;
+    use std::io::Cursor;
+
     use quickcheck_macros::quickcheck;
 
     use super::U64_LEN;
@@ -62,7 +59,7 @@ mod tests {
         // Cursor = easy way to get AsyncRead from an AsRef<[u8]>
         let mut input_stream = Cursor::new(buf_ref);
         // Run async task blocking to preserve quickcheck mechanics
-        let output = futures::executor::block_on(read_varint_u64(&mut input_stream));
+        let output = read_varint_u64(&mut input_stream);
 
         (input, input_len) == output.unwrap().unwrap()
     }

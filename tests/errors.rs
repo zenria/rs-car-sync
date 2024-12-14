@@ -1,9 +1,10 @@
-use futures::io::Cursor;
 use rs_car::car_read_all;
+
+use std::io::Cursor;
 
 enum TestResult {
     Error(&'static str),
-    Success(&'static str),
+    Success(#[allow(unused)] &'static str),
 }
 
 #[derive(PartialEq)]
@@ -23,7 +24,7 @@ macro_rules! error_test {
                 };
 
                 let mut input = Cursor::new(hex::decode($car_hex.replace(" ", "")).unwrap());
-                futures::executor::block_on(car_read_all(&mut input, validate_block_hash))
+                car_read_all(&mut input, validate_block_hash)
             });
 
             match result {

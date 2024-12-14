@@ -1,5 +1,6 @@
+use std::io::Read;
+
 use blake2b_simd::Params;
-use futures::{AsyncRead, AsyncReadExt};
 use libipld::{cid, multihash::MultihashGeneric};
 use sha2::{Digest, Sha256};
 
@@ -15,20 +16,14 @@ const CODE_BLAKE2B_256: u64 = 0xb220;
 const DIGEST_SIZE: usize = 64;
 const CID_V0_MH_SIZE: usize = 32;
 
-pub(crate) async fn read_block_cid<R: AsyncRead + Unpin>(
-    src: &mut R,
-) -> Result<(Cid, usize), CarDecodeError> {
-    let (version, version_len) = read_varint_u64(src)
-        .await?
-        .ok_or(cid::Error::InvalidCidVersion)?;
-    let (codec, codec_len) = read_varint_u64(src)
-        .await?
-        .ok_or(cid::Error::InvalidCidV0Codec)?;
+pub(crate) fn read_block_cid<R: Read>(src: &mut R) -> Result<(Cid, usize), CarDecodeError> {
+    let (version, version_len) = read_varint_u64(src)?.ok_or(cid::Error::InvalidCidVersion)?;
+    let (codec, codec_len) = read_varint_u64(src)?.ok_or(cid::Error::InvalidCidV0Codec)?;
 
     // A CIDv0 is indicated by a first byte of 0x12 followed by 0x20 which specifies a 32-byte (0x20) length SHA2-256 (0x12) digest.
     if [version, codec] == [CODE_SHA2_256, 0x20] {
         let mut digest = [0u8; CID_V0_MH_SIZE];
-        src.read_exact(&mut digest).await?;
+        src.read_exact(&mut digest)?;
         let mh = MultihashGeneric::wrap(version, &digest).expect("Digest is always 32 bytes.");
         return Ok((Cid::new_v0(mh)?, version_len + codec_len + CID_V0_MH_SIZE));
     }
@@ -41,7 +36,7 @@ pub(crate) async fn read_block_cid<R: AsyncRead + Unpin>(
     match version {
         cid::Version::V0 => Err(cid::Error::InvalidExplicitCidV0)?,
         cid::Version::V1 => {
-            let (mh, mh_len) = read_multihash(src).await?;
+            let (mh, mh_len) = read_multihash(src)?;
             Ok((
                 Cid::new(version, codec, mh)?,
                 version_len + codec_len + mh_len,
@@ -50,26 +45,22 @@ pub(crate) async fn read_block_cid<R: AsyncRead + Unpin>(
     }
 }
 
-async fn read_multihash<R: AsyncRead + Unpin>(
+fn read_multihash<R: Read>(
     r: &mut R,
 ) -> Result<(MultihashGeneric<DIGEST_SIZE>, usize), CarDecodeError> {
-    let (code, code_len) = read_varint_u64(r)
-        .await?
-        .ok_or(CarDecodeError::InvalidMultihash(
-            "invalid code varint".to_string(),
-        ))?;
-    let (size, size_len) = read_varint_u64(r)
-        .await?
-        .ok_or(CarDecodeError::InvalidMultihash(
-            "invalid size varint".to_string(),
-        ))?;
+    let (code, code_len) = read_varint_u64(r)?.ok_or(CarDecodeError::InvalidMultihash(
+        "invalid code varint".to_string(),
+    ))?;
+    let (size, size_len) = read_varint_u64(r)?.ok_or(CarDecodeError::InvalidMultihash(
+        "invalid size varint".to_string(),
+    ))?;
 
     if size > u8::MAX as u64 {
         panic!("digest size {} > max {}", size, DIGEST_SIZE)
     }
 
     let mut digest = [0; DIGEST_SIZE];
-    r.read_exact(&mut digest[..size as usize]).await?;
+    r.read_exact(&mut digest[..size as usize])?;
 
     // TODO: Sad, copies the digest (again)..
     // Multihash does not expose a way to construct Self without some decoding or copying
@@ -136,9 +127,8 @@ fn hash_blake2b_256(data: &[u8]) -> [u8; 32] {
 
 #[cfg(test)]
 mod tests {
-    use std::io;
+    use std::io::{self, Cursor};
 
-    use futures::{executor, io::Cursor};
     use libipld::cid::{
         multihash::{Multihash, MultihashGeneric},
         Cid,
@@ -165,7 +155,7 @@ mod tests {
         let cid_expected = Cid::try_from(CID_V0_STR).unwrap();
 
         let mut input_stream = from_hex(CID_V0_HEX);
-        let (cid, cid_len) = executor::block_on(read_block_cid(&mut input_stream)).unwrap();
+        let (cid, cid_len) = read_block_cid(&mut input_stream).unwrap();
 
         assert_eq!(cid, cid_expected);
         assert_eq!(cid_len, cid_expected.to_bytes().len());
@@ -177,7 +167,7 @@ mod tests {
         let mh_expected = MultihashGeneric::<64>::wrap(CODE_SHA2_256, &digest).unwrap();
 
         let mut input_stream = from_hex(CID_V0_HEX);
-        let (mh, mh_len) = executor::block_on(read_multihash(&mut input_stream)).unwrap();
+        let (mh, mh_len) = read_multihash(&mut input_stream).unwrap();
 
         assert_eq!(mh, mh_expected);
         assert_eq!(mh_len, mh_expected.to_bytes().len());
@@ -192,7 +182,7 @@ mod tests {
         let cid_expected = Cid::try_from(CID_V1_STR).unwrap();
 
         let mut input_stream = from_hex(CID_V1_HEX);
-        let (cid, cid_len) = executor::block_on(read_block_cid(&mut input_stream)).unwrap();
+        let (cid, cid_len) = read_block_cid(&mut input_stream).unwrap();
 
         // Double check multihash before full CID
         assert_eq!(cid.hash(), cid_expected.hash());
@@ -205,7 +195,7 @@ mod tests {
     fn read_multihash_error_varint_unexpected_eof() {
         let mut input_stream = from_hex("ffff");
 
-        match executor::block_on(read_multihash(&mut input_stream)) {
+        match read_multihash(&mut input_stream) {
             Err(CarDecodeError::IoError(err)) => {
                 assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof)
             }
