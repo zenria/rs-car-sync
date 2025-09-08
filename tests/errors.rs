@@ -59,7 +59,7 @@ macro_rules! error_test {
 error_test!(
     bad_cid_v0,
     "3aa265726f6f747381d8305825000130302030303030303030303030303030303030303030303030303030303030303030306776657273696f6e010130",
-    TestResult::Error("InvalidCarV1Header(\"header cbor codec error: Unknown cbor tag `48`.\")"),
+    TestResult::Error("InvalidCarV1Header(\"header cbor codec error: TypeMismatch { name: \\\"CBOR tag\\\", byte: 48 }\")"),
     TestOptions::None
 );
 
@@ -80,7 +80,7 @@ error_test!(
 error_test!(
     bad_section_length_2,
     "3aa265726f6f747381d8305825000130302030303030303030303030303030303030303030303030303030303030303030306776657273696f6e01200130302030303030303030303030303030303030303030303030303030303030303030303030303030303030",
-    TestResult::Error("InvalidCarV1Header(\"header cbor codec error: Unknown cbor tag `48`.\")"),
+    TestResult::Error("InvalidCarV1Header(\"header cbor codec error: TypeMismatch { name: \\\"CBOR tag\\\", byte: 48 }\")"),
     TestOptions::None
 );
 

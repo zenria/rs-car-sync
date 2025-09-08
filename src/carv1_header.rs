@@ -1,4 +1,4 @@
-use libipld::{cbor::DagCborCodec, cid::Cid, prelude::*, Ipld};
+use ipld_core::{cid::Cid, ipld::Ipld};
 
 use crate::error::CarDecodeError;
 
@@ -15,7 +15,7 @@ pub(crate) struct CarV1Header {
 /// [varint][DAG-CBOR block][varint|CID|block][varint|CID|block]
 /// ```
 pub(crate) fn decode_carv1_header(header: &[u8]) -> Result<CarV1Header, CarDecodeError> {
-    let header: Ipld = DagCborCodec.decode(header).map_err(|e| {
+    let header: Ipld = serde_ipld_dagcbor::from_slice(header).map_err(|e| {
         CarDecodeError::InvalidCarV1Header(format!("header cbor codec error: {e:?}"))
     })?;
 
@@ -100,7 +100,7 @@ mod tests {
         match decode_carv1_header(&header_buf) {
             Err(CarDecodeError::InvalidCarV1Header(str)) => assert_eq!(
                 str,
-                "header cbor codec error: invalid utf-8 sequence of 1 bytes from index 0"
+                "header cbor codec error: InvalidUtf8(Utf8Error { valid_up_to: 0, error_len: Some(1) })"
             ),
             x => panic!("other result {:?}", x),
         }
@@ -112,7 +112,7 @@ mod tests {
 
         match decode_carv1_header(&header_buf) {
             Err(CarDecodeError::InvalidCarV1Header(str)) => {
-                assert_eq!(str, "header expected cbor Map but got Integer(0)")
+                assert_eq!(str, "header cbor codec error: TrailingData")
             }
             x => panic!("other result {:?}", x),
         }
