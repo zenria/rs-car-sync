@@ -1,7 +1,7 @@
 use std::io::Read;
 
 use blake2b_simd::Params;
-use libipld::{cid, multihash::MultihashGeneric};
+use ipld_core::cid::{self, multihash::Multihash};
 use sha2::{Digest, Sha256};
 
 use crate::{
@@ -24,7 +24,7 @@ pub(crate) fn read_block_cid<R: Read>(src: &mut R) -> Result<(Cid, usize), CarDe
     if [version, codec] == [CODE_SHA2_256, 0x20] {
         let mut digest = [0u8; CID_V0_MH_SIZE];
         src.read_exact(&mut digest)?;
-        let mh = MultihashGeneric::wrap(version, &digest).expect("Digest is always 32 bytes.");
+        let mh = Multihash::wrap(version, &digest).expect("Digest is always 32 bytes.");
         return Ok((Cid::new_v0(mh)?, version_len + codec_len + CID_V0_MH_SIZE));
     }
 
@@ -45,9 +45,7 @@ pub(crate) fn read_block_cid<R: Read>(src: &mut R) -> Result<(Cid, usize), CarDe
     }
 }
 
-fn read_multihash<R: Read>(
-    r: &mut R,
-) -> Result<(MultihashGeneric<DIGEST_SIZE>, usize), CarDecodeError> {
+fn read_multihash<R: Read>(r: &mut R) -> Result<(Multihash<DIGEST_SIZE>, usize), CarDecodeError> {
     let (code, code_len) = read_varint_u64(r)?.ok_or(CarDecodeError::InvalidMultihash(
         "invalid code varint".to_string(),
     ))?;
@@ -65,7 +63,7 @@ fn read_multihash<R: Read>(
     // TODO: Sad, copies the digest (again)..
     // Multihash does not expose a way to construct Self without some decoding or copying
     // unwrap: multihash must be valid since it's constructed manually
-    let mh = MultihashGeneric::wrap(code, &digest[..size as usize]).unwrap();
+    let mh = Multihash::wrap(code, &digest[..size as usize]).unwrap();
 
     Ok((mh, code_len + size_len + size as usize))
 }
@@ -129,10 +127,7 @@ fn hash_blake2b_256(data: &[u8]) -> [u8; 32] {
 mod tests {
     use std::io::{self, Cursor};
 
-    use libipld::cid::{
-        multihash::{Multihash, MultihashGeneric},
-        Cid,
-    };
+    use ipld_core::cid::{multihash::Multihash, Cid};
 
     use super::{assert_block_cid, read_block_cid, read_multihash};
     use crate::{block_cid::CODE_SHA2_256, error::CarDecodeError};
@@ -164,7 +159,7 @@ mod tests {
     #[test]
     fn read_multihash_from_v0() {
         let digest = hex::decode(CID_DIGEST).unwrap();
-        let mh_expected = MultihashGeneric::<64>::wrap(CODE_SHA2_256, &digest).unwrap();
+        let mh_expected = Multihash::<64>::wrap(CODE_SHA2_256, &digest).unwrap();
 
         let mut input_stream = from_hex(CID_V0_HEX);
         let (mh, mh_len) = read_multihash(&mut input_stream).unwrap();
@@ -173,7 +168,7 @@ mod tests {
         assert_eq!(mh_len, mh_expected.to_bytes().len());
 
         // Sanity check, same result as sync version. Sync API can dynamically shrink size to 32 bytes
-        let mh_sync = Multihash::read(&mut mh_expected.to_bytes().as_slice()).unwrap();
+        let mh_sync = Multihash::<64>::read(&mut mh_expected.to_bytes().as_slice()).unwrap();
         assert_eq!(mh_sync, mh_expected);
     }
 

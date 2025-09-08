@@ -9,7 +9,7 @@
 
 use std::io::Read;
 
-pub use libipld::cid::Cid;
+pub use ipld_core::cid::Cid;
 
 use crate::{
     block_cid::assert_block_cid,
