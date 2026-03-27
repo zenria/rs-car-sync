@@ -4,7 +4,7 @@ version = "0.5.0"
 edition = "2021"
 description = "Rust implementation of the CAR v1 and v2 specifications using standard sync api"
 keywords = ["ipfs", "ipld", "car"]
-repository = "https://github.com/dapplion/rs-car-sync"
+repository = "https://github.com/zenria/rs-car-sync"
 documentation = "https://docs.rs/rs-car-sync"
 authors = [
     "dapplion <dapplion@chainsafe.io>",
